@@ -87,14 +87,24 @@ availableActions merc s =
 
 
 
-draw (State mapdim a d _) = unlines (
+draw (State mapdim a d ms _) = unlines (
 	("Deck: " ++ ((show . length) d)) : [
-	(concat [ drawTile (a!(i,j)) | i <- [1..(fst mapdim)] ])
+	(concat [ drawTile (i,j) (a!(i,j)) | i <- [1..(fst mapdim)] ])
 		| j <- [1..(snd mapdim)] ])
 	where 
-		drawTile Nothing = "   "
-		drawTile (Just (Tile [])) = "   "
-		drawTile (Just (Tile (x:xs))) = " " ++ drawCard x ++ " "
+		drawTile c Nothing = "   "
+		drawTile c (Just (Tile [])) = "   "
+		drawTile c (Just (Tile (x:xs))) = drawMercs c a ms ++ drawCard x ++ " "
+
+		drawMercs c a [] = " "
+		drawMercs c a (m:ms) = 
+			if loc m == c then (
+				case mercState m of
+					Hidden -> "o"
+					Revealed -> "*"
+					Dead -> drawMercs c a ms
+			) else drawMercs c a ms
+
 		drawCard 13 = "K"
 		drawCard 12 = "Q"
 		drawCard 11 = "J"
@@ -104,7 +114,10 @@ draw (State mapdim a d _) = unlines (
 
 
 
-state = State md (makeMap md) ((take 52 . cycle) [1,2,3,4,5,6,7,8,9,10,11,12,13]) []
+state = State md (makeMap md) ((take 52 . cycle)
+	[1,2,3,4,5,6,7,8,9,10,11,12,13]) [
+		Merc 1 1 Hidden [] (4,1)
+	] (mkStdGen 1)
 	where md = mapdim 4
 
 
@@ -121,9 +134,11 @@ dealtState = dealMap state
 
 main = do {
 	putStr (draw dealtState);
-	print (availableActions (Merc 1 1 Hidden [] (4,1)) dealtState);
-	print (vicinity (4,1) (gameMap dealtState))
-}
+	putStr (draw (perform a m dealtState))
+} where	
+	m = Merc 1 1 Hidden [] (4,1)
+	as = availableActions m dealtState
+	a = head as
 
 
 
