@@ -2,6 +2,11 @@ import Data.Array
 import Data.List
 import Data.Maybe
 import System.Random
+import qualified System.Random.Shuffle as RS
+import qualified Control.Monad.State as SM
+import Control.Monad.Identity
+import Control.Monad.Morph
+import Control.Monad.State (lift)
 
 data Tile = Tile {
 	cards :: [Int]
@@ -36,25 +41,39 @@ data State = State {
 
 -- Game state Monad
 
-newtype StateM s a = StateM {
-	runState :: s -> (a, s)
-}
-instance Monad (StateM s) where
-	return a = StateM $ \s -> (a,s)
-	sp >>= spg = StateM $ \s ->
-		let (a,s') = runState sp s
-		in runState (spg a) s'
-type GameStateM a = StateM State a
+type GameStateM a = SM.State State a
+
+state = SM.get
+state's = SM.gets
+setState :: s -> SM.State s ()
+setState = SM.put
+updState = SM.modify
 
 
 -- Dice 
 -- ----
 
 randomInt :: (Int,Int) -> GameStateM Int
-randomInt r = StateM $ \s ->
-	let (x,r') = randomR r (rng s)
-	in (x, s { rng = r' })
+randomInt r = do {
+	_rng <- state's rng;
+	let (x,r') = randomR r _rng
+	in do {
+		updState $ \s -> s { rng = r' };
+		return x
+	}
+}
 
+shuffle :: [a] -> GameStateM [a]
+shuffle xs = do {
+	rs <- randoms (length xs) 1 xs;
+	return $ RS.shuffle xs rs
+} where
+	randoms n i [x] = do { return [] }
+	randoms n i (x:xs) = do {
+		r <- randomInt (0,n-i);
+		rs <- randoms n (i+1) xs;
+		return $ r:rs;
+	}
 
 roll :: GameStateM (Int,Int)
 roll = do {
@@ -64,19 +83,24 @@ roll = do {
 }
 
 
-tileAt c = StateM (\s -> (
-	(head . cards . fromJust . (\m -> m!c) . gameMap) s,
-	s ))
+tileAt c = SM.gets (head . cards . fromJust . (\m -> m!c) . gameMap)
+
+setDeck d = updState $ \s -> s { deck = d }
 
 
-takeCard = StateM (\s ->
-	let c:cs = deck s
-	in (c, s { deck = cs }) )
+takeCard :: GameStateM Int
+takeCard = do {
+	s <- state;
+	let d = deck s in do {
+		setDeck $ tail d;
+		return $ head d;
+	}
+}
+
 
 updateMerc :: Mercenary -> Mercenary -> GameStateM ()
-updateMerc m m' = StateM (\s -> ((), s { mercs = upd (mercs s) }))
-	where
-		upd (_m:ms) = if m == _m then m':ms else upd ms
+updateMerc m m' = updState $ \s -> s { mercs = upd (mercs s) }
+	where upd (_m:ms) = if m == _m then m':ms else upd ms
 
 
 
@@ -155,11 +179,6 @@ vicinity (x,y) m = filter (f . (!) m) [(i,j)
 
 
 packOfCards = take 52 $ cycle [1,2,3,4,5,6,7,8,9,10,11,12,13]
-state = State md (makeMap md) packOfCards [
-		Merc 1 1 Hidden [] (4,1)
-	] (mkStdGen 1)
-	where md = mapdim 4
-
 
 dealMap s = (foldl f s . assocs . gameMap) s
 	where
@@ -169,12 +188,13 @@ dealMap s = (foldl f s . assocs . gameMap) s
 			deck = tail (deck s)
 		}
 
-dealtState = dealMap state
-
 
 
 -- User Input
 -- ----------
+
+type GameIO a = SM.StateT State IO a
+hoistState = hoist $ return . runIdentity
 
 selectAction :: Mercenary -> [Action] -> IO Action
 selectAction m as = do {
@@ -215,18 +235,46 @@ draw (State mapdim a d ms _) = unlines (
 		drawCard 1  = "A"
 		drawCard x  = show x
 
+drawMap :: GameIO ()
+drawMap = do {
+	s <- hoistState state;
+	lift $ putStr $ draw s
+}
+
+shuffleDeck = do {
+	s <- state;
+	d <- shuffle $ deck s;
+	setDeck d;
+}
+
+
+um = Merc 1 1 Hidden [] (4,1)
+
+runGameRound :: GameIO ()
+runGameRound = do {
+	s <- hoistState state;
+	a <- lift $ selectAction um $ availableActions um s;
+	hoistState $ perform a um
+}
+
+runGame :: GameIO ()
+runGame = do {
+	hoistState shuffleDeck;
+	runGameRound;
+	drawMap
+}
 
 
 main = do {
 	_rng <- newStdGen;
 	s <- return $ dealMap $ State md (makeMap md) packOfCards [m] _rng;
-	putStr (draw s);
-	a <- selectAction m as;
-	(putStr . draw . snd . runState (perform a m)) s
+	SM.runStateT runGame $ s
+	--a <- selectAction m as;
+	--(putStr . draw . snd . runState (perform a m)) s
 } where	
 	md = mapdim 4
 	m = Merc 1 1 Hidden [] (4,1)
-	as = availableActions m dealtState
+	--as = availableActions m dealtState
 
 
 
